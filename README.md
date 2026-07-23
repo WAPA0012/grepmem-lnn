@@ -1,9 +1,8 @@
 # grepmem-lnn
 
-> Liquid Neural Network time-decay for [grepmem](https://github.com/WAPA0012/grepmem) salience.
-> Replacing grepmem's flat global linear decay with CfC-inspired continuous-time dynamics where each memory has its own reinforcement-adaptive time constant τ.
+> Liquid Neural Network experiments for [grepmem](https://github.com/WAPA0012/grepmem): (R1) per-memory CfC time-decay replacing flat linear salience decay, and (R2) a coupled-CfC session-state scheduler that re-weights retrieval by the agent's accumulated focus.
 
-**Status: experiment complete. Results below are honest, including the negative one.**
+**Status: both rounds complete. Results below are honest, including the negative ones.**
 
 This is research code. It does **not** modify grepmem — it imports grepmem's engine read-only and re-ranks retrieval results with its own decay strategies, so flat vs liquid can be compared cleanly.
 
@@ -47,7 +46,7 @@ npm test   # 16/16 pass
 
 > **Honest note on the ncps check.** An ncps `CfC` layer is a *general* CfC instance with random weights and the full synaptic `f·(A−x)` term active. Its zero-input trajectory therefore does **not** numerically track our scalar pure-decay reduction — the internal weights drive `f ≠ 0` even with no external input. The load-bearing correctness proof is JS == analytical-closed-form (verified to 1e-9). The ncps run only corroborates that the reduction is a legitimate special case of the CfC family, qualitatively. I deliberately did **not** overclaim "JS == real LNN numerically."
 
-## Results
+## Results — Round 1: per-memory liquid time-decay
 
 ### Experiment 1 — LongMemEval-S retrieval benchmark (the *negative* result)
 
@@ -84,7 +83,59 @@ Sample row (cfgAge=60, reinforces=5):
   lnn:  0.567 / 0.495  → picks config (consolidation saved it)   ← LNN wins
 ```
 
-## What this means
+---
+
+# Round 2: state-aware retrieval scheduling
+
+Round 1 changed the `salience` factor of `match × salience`. Round 2 attacks the other factor — `match` — with a **session-state vector** that an LNN maintains across turns, dynamically re-weighting which retrieval terms get amplified based on "what the agent is currently focused on". This is the "agent remembers the ongoing task's focus" capability pure grep retrieval lacks.
+
+## The state (coupled CfC)
+
+`z = (z_focus, z_conf)` evolved by one CfC cell:
+- **z_focus ∈ Δ⁴** — soft distribution over 4 retrieval-relevant focus modes: `exact-entity`, `procedure-debug`, `config-param`, `narrative-context`. Each mode favors different term types (exact/ip vs synonym/learned vs en_ci/number vs bigram/trigram).
+- **z_conf ∈ [0,1]** — a confidence channel that **modulates the focus time constant τ** (the load-bearing coupling): high confidence → large τ → focus resists change (inertia); low confidence → small τ → focus re-orients fast. This cross-channel coupling is structurally impossible for a per-channel scalar-decay ablation.
+- **focusLex** — a CfC-decayed bag of words from recent turns, the channel that makes state-awareness actually fire on English queries (term-type boosts alone rarely trigger there, since `synonym`/`learned` terms only arise via the bilingual synonym map).
+
+Readout: a hand-designed 4×9 boost table × confidence gate. No training data; the LNN's *dynamics* are used, not learned representations (without training data the latter is infeasible — this is an explicit, reported limitation).
+
+## Results — Round 2
+
+### Tier A — constructed multi-turn scenario (positive)
+
+A reinforced old-but-topic-relevant memory vs a fresh oneoff, equal lexical match. State-awareness breaks the tie via topic continuity. 300 scenarios:
+
+| strategy | picks-correct-answer% |
+|---|---|
+| flat-rescore (no state) | **0%** (genuine lexical tie → loses) |
+| scalar-focus (fixed τ) | **100%** |
+| lnn-coupled (full) | **100%** |
+
+State-aware retrieval works (+100pt vs flat). **But scalar-focus = lnn-coupled = 100%** — the lexical-focus bag did all the work; the coupling added nothing in this short deterministic setting.
+
+### Tier B — LoCoMo real multi-session data (negative)
+
+Full dataset, 1982 evidence-filtered QA across 10 conversations (up to 35 sessions each), any-hit R@5:
+
+| strategy | R@5 overall | early(1-5) | mid(6-15) | late(16+) |
+|---|---|---|---|---|
+| flat (no state) | **28.6%** | 24% | 30% | 29% |
+| scalar-focus (fixed τ) | **28.9%** | 23% | 29% | 31% |
+| lnn-coupled (full) | **28.8%** | 24% | 29% | 30% |
+
+- **flat → coupled: +0.2pt** — effectively zero, within noise.
+- **scalar → coupled: −0.2pt** — coupling does not help on long horizons.
+- **late-span (the predicted coupling win zone): −0.6pt** — coupling slightly *hurts*.
+
+## What this means (Round 2)
+
+- **The state-aware mechanism is real and fires** (Tier A: +100pt) — when lexical match is a genuine tie, topic continuity from accumulated state breaks it correctly.
+- **On real conversational data it does not help** (Tier B: ~0pt) — and **the coupled CfC adds nothing over a simple scalar-decay focus bag** (scalar ≈ coupled, sometimes scalar wins). This is the honest, decisive finding.
+- **Why?** LoCoMo's QA questions are asked by an external evaluator about the conversation, not in-conversation follow-ups driven by the speaker's focus. The "state" we accumulate from prior turns is a weak proxy for what the probe question actually needs, and lexical match dominates ranking regardless. The coupling (confidence-modulated τ) is a second-order effect that never gets leverage.
+- **The coupled CfC is load-bearing only in principle.** The unit tests prove the coupling works (high-conf inertia vs low-conf re-orientation), but no real benchmark here exercises a regime where that coupling beats a fixed-τ scalar. Without training data to learn the state→readout mapping, the LNN's representational advantage is unavailable, and its dynamical advantage is too subtle to register on these tasks.
+
+**Bottom line for Round 2:** state-aware retrieval is a coherent idea that demonstrably works in controlled tie-breaking scenarios, but on real multi-session QA it provides no measurable benefit, and the LNN coupling specifically adds nothing over a simpler scalar-decay baseline. This is reported as-is — a negative result that bounds where the approach helps.
+
+## What this means (Round 1)
 
 - **LNN decay is mathematically sound** (verified to 1e-9 against the closed form, and to <1% against an independent Python re-derivation).
 - **It does NOT help on single-shot retrieval benchmarks** like LongMemEval-S — those can't exercise per-memory reinforcement. Don't expect gains there.
@@ -100,22 +151,36 @@ Sample row (cfgAge=60, reinforces=5):
 | `lib/grepmem-shim.js` | Imports grepmem engine from sibling `../ai-memory/` |
 | `eval/test-decay.mjs` | 13 unit tests: LNN decay vs analytical solution |
 | `eval/test-equivalence.mjs` | JS vs Python numerical equivalence |
-| `eval/ab-decay.mjs` | Exp 1: flat vs lnn on LongMemEval-S R@5/R@10 |
-| `eval/cumulative-use.mjs` | Exp 2: adversarial consolidation sweep |
+| `eval/ab-decay.mjs` | R1 Exp 1: flat vs lnn on LongMemEval-S R@5/R@10 |
+| `eval/cumulative-use.mjs` | R1 Exp 2: adversarial consolidation sweep |
 | `eval/diag-salience.mjs` | Single-question salience dump (debugging) |
+| `lib/focus-classifier.js` | R2: query → CfC input signal (lexical cues) |
+| `lib/state-scheduler.js` | R2: coupled CfC state (z_focus + z_conf + focusLex) |
+| `lib/match-rescore.js` | R2: state-aware match re-scoring |
+| `eval/test-state-scheduler.mjs` | R2: 16 unit tests incl. the coupling tests |
+| `eval/tier-a-synthetic.mjs` | R2 Tier A: constructed multi-turn scenarios |
+| `eval/tier-b-locomo.mjs` | R2 Tier B: LoCoMo real multi-session QA |
 | `python/cfc_reference.py` | Reference CfC via `ncps`/torch |
 
 ## Run it
 
 ```bash
-# Correctness
+# Correctness (R1 + R2 unit tests)
 npm test
+node --test eval/test-state-scheduler.mjs   # R2 state tests
 
-# Exp 1 (needs ../ai-memory/data/longmemeval_s_cleaned.json)
+# R1 experiments
 LIMIT=50 TYPES=temporal-reasoning,knowledge-update node eval/ab-decay.mjs
-
-# Exp 2 (self-contained, no dataset)
 node eval/cumulative-use.mjs
+
+# R2 experiments
+SCENARIOS=300 node eval/tier-a-synthetic.mjs
+CONV=10 TOPK=5 node eval/tier-b-locomo.mjs   # needs eval/locomo/locomo10.json (see below)
+```
+
+LoCoMo (Tier B) data isn't committed (2.8MB); fetch it:
+```bash
+curl -L -o eval/locomo/locomo10.json https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json
 ```
 
 ## Fairness invariant

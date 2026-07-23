@@ -25,3 +25,7 @@ node_modules/
 *.swp
 .idea/
 .vscode/
+
+# LoCoMo dataset (2.8MB) — fetch via curl, see README
+eval/locomo/*.json
+!eval/locomo/.gitkeep
