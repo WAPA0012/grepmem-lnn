@@ -135,6 +135,44 @@ Full dataset, 1982 evidence-filtered QA across 10 conversations (up to 35 sessio
 
 **Bottom line for Round 2:** state-aware retrieval is a coherent idea that demonstrably works in controlled tie-breaking scenarios, but on real multi-session QA it provides no measurable benefit, and the LNN coupling specifically adds nothing over a simpler scalar-decay baseline. This is reported as-is — a negative result that bounds where the approach helps.
 
+---
+
+# Round 3: training the focus channel (and the ceiling it hits)
+
+Round 2's state-aware scheduler gave ~0pt on LoCoMo. Round 3 asks: **is that a fixable focus-signal problem (training could help) or a lexical ceiling (training is futile)?** The answer turned out more interesting than either.
+
+## Step 0 — bottleneck diagnostic (the go/no-go gate)
+
+Before writing any training code, an **oracle analysis** (`eval/diag-bottleneck.mjs`) measured the R@5 *ceiling* if the focus channel had perfect information — i.e., cheating by giving the known evidence turns a direct bonus:
+
+| variant | R@5 | meaning |
+|---|---|---|
+| A. flat (no state) | **24.8%** | baseline |
+| B. **oracle-focus-bonus** (perfect topic ID) | **99.8%** | the ceiling |
+| C. uniform boost sweep (any magnitude) | 24.8% | readout magnitude is irrelevant |
+| D. real boosts, no focus bag | 25.9% | the hand-designed boost table does nothing |
+
+**B − A = +74.9pt.** This decisively *rejects* the lexical-ceiling hypothesis: a focus channel that could accurately identify on-topic candidates has enormous headroom. Training is worth attempting.
+
+It also localized the bottleneck precisely: **the readout magnitude is not the problem** (C ≈ A for all boost values) — the problem is *which candidates the focus signal points at*.
+
+## Step 1 — training word weights
+
+Two lexical-training attempts (`eval/train-readout.mjs`), both honest about being weak-supervision feature weighting, not deep learning:
+
+**Cross-conversation log-odds weights** (train on 6 convs, eval on 4 held-out): learn per-word weights from evidence-vs-non-evidence turns. Result: **+2.7pt** (29.3% → 31.9%), but captures only **4% of the oracle headroom**. The top "on-topic" words (`milk`, `film`, `younger`) are content words specific to the *training* conversations — classic overfitting that doesn't transfer.
+
+**Within-conversation adaptive idf** (learn vocabulary rarity inside each eval conversation): **−21.3pt** (collapses to 8%). Actively harmful — idf rewards rare/noise words over meaningful ones.
+
+## What this means (Round 3)
+
+- **The +74.9pt headroom is real** — an oracle focus channel proves state-aware retrieval *could* dramatically help on LoCoMo. This overturns the Round 2 read that it's a dead end.
+- **But that headroom is semantic, not lexical.** Knowing "which turn *answers* the question" requires understanding the question — which is exactly what an embedding/semantic model does, and exactly what grepmem deliberately does **not** have (vectorless by design).
+- **Lexical re-training cannot reach it.** Cross-conv word weights overfit to content; within-conv idf rewards noise. Neither captures "this turn is the answer to that question."
+- **The honest conclusion:** the state-aware retrieval direction is *not* futile in principle (oracle proves a 3× R@5 ceiling exists), but unlocking it requires a semantic retrieval component — which would violate grepmem's vectorless philosophy. Within the lexical-only constraint grepmem imposes, the focus channel's potential is unreachable. This is a clean, data-backed boundary, not a cop-out.
+
+**Net across all three rounds:** LNN time-decay (R1) gives a real, usable gain in cumulative-use scenarios (+24pt consolidation). State-aware retrieval (R2/R3) has a provably large ceiling but one that's only reachable with semantics, not lexical state — so it stays at ~0pt within grepmem's design. Both conclusions are backed by numbers, including the negatives.
+
 ## What this means (Round 1)
 
 - **LNN decay is mathematically sound** (verified to 1e-9 against the closed form, and to <1% against an independent Python re-derivation).
@@ -160,6 +198,8 @@ Full dataset, 1982 evidence-filtered QA across 10 conversations (up to 35 sessio
 | `eval/test-state-scheduler.mjs` | R2: 16 unit tests incl. the coupling tests |
 | `eval/tier-a-synthetic.mjs` | R2 Tier A: constructed multi-turn scenarios |
 | `eval/tier-b-locomo.mjs` | R2 Tier B: LoCoMo real multi-session QA |
+| `eval/diag-bottleneck.mjs` | R3: oracle ceiling diagnostic (go/no-go gate) |
+| `eval/train-readout.mjs` | R3: word-weight focus training + eval |
 | `python/cfc_reference.py` | Reference CfC via `ncps`/torch |
 
 ## Run it
@@ -176,6 +216,10 @@ node eval/cumulative-use.mjs
 # R2 experiments
 SCENARIOS=300 node eval/tier-a-synthetic.mjs
 CONV=10 TOPK=5 node eval/tier-b-locomo.mjs   # needs eval/locomo/locomo10.json (see below)
+
+# R3 experiments (training the focus channel)
+CONV=3 node eval/diag-bottleneck.mjs         # oracle ceiling — the go/no-go gate
+TRAIN=6 EVAL=10 node eval/train-readout.mjs  # word-weight training + eval
 ```
 
 LoCoMo (Tier B) data isn't committed (2.8MB); fetch it:
