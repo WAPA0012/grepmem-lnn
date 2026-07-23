@@ -1,0 +1,27 @@
+# Experiment outputs (large, regenerable)
+results/*.json
+results/*.jsonl
+.ab-*/
+.lme-*/
+.test-*/
+
+# Keep the dir
+!results/.gitkeep
+
+# Don't duplicate the 277MB dataset — reference ../ai-memory/data/ instead
+data/
+
+# Python
+python/__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# OS/editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

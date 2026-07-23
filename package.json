@@ -1,0 +1,17 @@
+{
+  "name": "grepmem-lnn",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Liquid Neural Network time-decay for grepmem salience. An experiment replacing flat linear decay with CfC-inspired continuous-time dynamics.",
+  "type": "module",
+  "main": "lib/decay-comparator.js",
+  "scripts": {
+    "test": "node --test eval/test-decay.mjs eval/test-equivalence.mjs",
+    "test:decay": "node --test eval/test-decay.mjs",
+    "test:equiv": "node --test eval/test-equivalence.mjs",
+    "ab-decay": "node eval/ab-decay.mjs"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

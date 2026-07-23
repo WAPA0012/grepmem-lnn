@@ -1,0 +1,8 @@
+# Reference CfC decay implementation dependencies.
+# Install: pip install -r python/requirements.txt
+#
+# The JS experiment does NOT need any of these — this Python script only
+# exists to corroborate that the JS reduction is a faithful CfC instance.
+ncps>=1.0.5
+torch>=2.0
+numpy>=1.24
